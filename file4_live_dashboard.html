@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EnerCloud — Live Energy Dashboard</title>
+
+  <!-- Firebase SDK (v9 compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #0D1117;
+      --card: #161B22;
+      --border: #30363D;
+      --text: #E6EDF3;
+      --muted: #8B949E;
+      --green: #3FB950;
+      --yellow: #D29922;
+      --blue: #58A6FF;
+      --purple: #BC8CFF;
+      --red: #F85149;
+      --orange: #FFA657;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px; }
+
+    .top-bar {
+      background: #1F3864;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #2A4A80;
+    }
+    .top-bar h1 { font-size: 18px; font-weight: 600; color: #fff; }
+    .top-bar .sub { font-size: 12px; color: #90CAF9; margin-top: 2px; }
+    .live-badge {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(63,185,80,0.15); border: 1px solid var(--green);
+      padding: 4px 12px; border-radius: 20px; font-size: 12px; color: var(--green);
+    }
+    .live-dot {
+      width: 8px; height: 8px; background: var(--green);
+      border-radius: 50%; animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    .summary-bar {
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+      background: var(--border); border-bottom: 1px solid var(--border);
+    }
+    .summary-item {
+      background: var(--card); padding: 12px 16px; text-align: center;
+    }
+    .summary-item .val { font-size: 22px; font-weight: 700; }
+    .summary-item .lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .main { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px 20px; }
+
+    .city-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .city-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; transition: border-color .3s;
+    }
+    .city-card.updated { border-color: var(--green); }
+    .city-card .city-name { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+    .city-card .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+    .metric { background: #0D1117; border-radius: 6px; padding: 7px 10px; }
+    .metric .m-val { font-size: 16px; font-weight: 600; }
+    .metric .m-lbl { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    .decision-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    }
+    .decision-badge.solar    { background: rgba(63,185,80,.15);  color: var(--green);  border: 1px solid var(--green); }
+    .decision-badge.battery  { background: rgba(188,140,255,.15); color: var(--purple); border: 1px solid var(--purple); }
+    .decision-badge.grid     { background: rgba(88,166,255,.15);  color: var(--blue);   border: 1px solid var(--blue); }
+    .decision-badge.hybrid   { background: rgba(255,166,87,.15);  color: var(--orange); border: 1px solid var(--orange); }
+
+    .sidebar { display: flex; flex-direction: column; gap: 12px; }
+
+    .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+    .panel h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 12px; }
+
+    .chart-wrap { position: relative; height: 180px; }
+
+    .decision-log { max-height: 260px; overflow-y: auto; }
+    .log-entry {
+      padding: 7px 0; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: flex-start;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry .log-city { font-size: 12px; font-weight: 500; }
+    .log-entry .log-src { font-size: 11px; }
+    .log-entry .log-time { font-size: 10px; color: var(--muted); }
+
+    .alert-box {
+      background: rgba(248,81,73,.1); border: 1px solid var(--red);
+      border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--red);
+      margin-top: 8px;
+    }
+    .co2-bar { margin-top: 10px; }
+    .co2-bar .co2-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+    .co2-track { background: var(--border); border-radius: 4px; height: 8px; overflow: hidden; }
+    .co2-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width .5s; }
+
+    .footer { text-align: center; padding: 10px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <h1>⚡ EnerCloud — Live Energy Dashboard</h1>
+    <div class="sub">EnerCloud Pvt. Ltd. · Real-time smart grid monitoring</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div id="clock" style="font-size:13px;color:#90CAF9"></div>
+    <div class="live-badge"><div class="live-dot"></div> LIVE</div>
+  </div>
+</div>
+
+<div class="summary-bar">
+  <div class="summary-item"><div class="val" id="sum-demand" style="color:var(--blue)">—</div><div class="lbl">Total Demand (kW)</div></div>
+  <div class="summary-item"><div class="val" id="sum-solar"  style="color:var(--green)">—</div><div class="lbl">Total Solar (kW)</div></div>
+  <div class="summary-item"><div class="val" id="sum-co2"    style="color:var(--orange)">—</div><div class="lbl">CO₂ Saved (kg)</div></div>
+  <div class="summary-item"><div class="val" id="sum-cities" style="color:var(--purple)">5</div><div class="lbl">Cities Online</div></div>
+  <div class="summary-item"><div class="val" id="sum-alerts" style="color:var(--yellow)">0</div><div class="lbl">Active Alerts</div></div>
+</div>
+
+<div class="main">
+  <div>
+    <div class="city-grid" id="city-grid">
+      <!-- City cards injected by JS -->
+    </div>
+  </div>
+  <div class="sidebar">
+    <div class="panel">
+      <h3>Energy Mix (All Cities)</h3>
+      <div class="chart-wrap"><canvas id="mixChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h3>Decision Log</h3>
+      <div class="decision-log" id="decision-log">
+        <div style="color:var(--muted);font-size:12px">Waiting for data...</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>CO₂ Savings by City</h3>
+      <div id="co2-bars"></div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">EnerCloud v1.0 · Data updates every 5 seconds · Connected to Google Firebase Realtime Database</div>
+
+<script>
+  // ─── STEP 1: Replace with your Firebase config ──────────────────────────
+  const firebaseConfig = {
+  apiKey: "AIzaSy...",
+  authDomain: "enercloud-ed207.firebaseapp.com",
+  databaseURL: "https://enercloud-ed207-default-rtdb.firebaseio.com",
+  projectId: "enercloud-ed207",
+  storageBucket: "enercloud-ed207.appspot.com",
+  messagingSenderId: "803999610903",
+  appId: "1:803999610903:web:..."
+};
+  // ────────────────────────────────────────────────────────────────────────
+
+  firebase.initializeApp(firebaseConfig);
+  const dbRef = firebase.database();
+
+  const CITIES = ["Mumbai", "Delhi", "Chennai", "Bangalore", "Hyderabad"];
+  const cityData = {};
+  const decisionLog = [];
+
+  // ─── Clock ────────────────────────────────────────────────────────────────
+  setInterval(() => {
+    document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-IN", { hour12: false });
+  }, 1000);
+
+  // ─── Build city cards ─────────────────────────────────────────────────────
+  function buildCityCards() {
+    const grid = document.getElementById("city-grid");
+    grid.innerHTML = "";
+    CITIES.forEach(city => {
+      const card = document.createElement("div");
+      card.className = "city-card";
+      card.id = `card-${city}`;
+      card.innerHTML = `
+        <div class="city-name">📍 ${city}</div>
+        <div class="metrics">
+          <div class="metric"><div class="m-val" id="${city}-demand" style="color:var(--blue)">—</div><div class="m-lbl">Demand (kW)</div></div>
+          <div class="metric"><div class="m-val" id="${city}-solar"  style="color:var(--green)">—</div><div class="m-lbl">Solar (kW)</div></div>
+          <div class="metric"><div class="m-val" id="${city}-batt"   style="color:var(--purple)">—</div><div class="m-lbl">Battery (%)</div></div>
+          <div class="metric"><div class="m-val" id="${city}-temp"   style="color:var(--orange)">—</div><div class="m-lbl">Temp (°C)</div></div>
+        </div>
+        <div id="${city}-decision">
+          <span class="decision-badge grid">⚡ Waiting...</span>
+        </div>
+        <div id="${city}-alert"></div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  // ─── Update a city card ───────────────────────────────────────────────────
+  function updateCityCard(city, reading, decision) {
+    if (reading) {
+      document.getElementById(`${city}-demand`).textContent = reading.demand_kw?.toFixed(0) ?? "—";
+      document.getElementById(`${city}-solar`).textContent  = reading.solar_kw?.toFixed(0) ?? "—";
+      document.getElementById(`${city}-batt`).textContent   = reading.battery_soc_pct?.toFixed(0) + "%" ?? "—";
+      document.getElementById(`${city}-temp`).textContent   = reading.temperature_c?.toFixed(1) + "°C" ?? "—";
+    }
+    if (decision) {
+      const src = decision.recommended_source || "";
+      const cls = src.toLowerCase().includes("solar") && src.includes("+") ? "hybrid"
+                : src.toLowerCase().includes("solar") ? "solar"
+                : src.toLowerCase().includes("battery") ? "battery" : "grid";
+      const icon = { solar:"☀️", battery:"🔋", hybrid:"⚡", grid:"🏭" }[cls] || "⚡";
+      document.getElementById(`${city}-decision`).innerHTML =
+        `<span class="decision-badge ${cls}">${icon} ${src}</span>` +
+        (decision.co2_saved_kg ? `<span style="font-size:10px;color:var(--muted);margin-left:8px">CO₂ saved: ${decision.co2_saved_kg} kg</span>` : "");
+      const alertEl = document.getElementById(`${city}-alert`);
+      alertEl.innerHTML = decision.alert ? `<div class="alert-box">${decision.alert}</div>` : "";
+    }
+    // Flash updated
+    const card = document.getElementById(`card-${city}`);
+    card.classList.add("updated");
+    setTimeout(() => card.classList.remove("updated"), 1200);
+  }
+
+  // ─── Energy mix doughnut chart ────────────────────────────────────────────
+  let mixChart;
+  function initMixChart() {
+    const ctx = document.getElementById("mixChart").getContext("2d");
+    mixChart = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels: ["Solar", "Battery", "Grid", "Hybrid"],
+        datasets: [{ data: [0, 0, 0, 0], backgroundColor: ["#3FB950", "#BC8CFF", "#58A6FF", "#FFA657"], borderWidth: 0 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: "65%",
+        plugins: { legend: { position: "bottom", labels: { color: "#E6EDF3", font: { size: 11 } } } }
+      }
+    });
+  }
+
+  function updateMixChart() {
+    const counts = { solar: 0, battery: 0, grid: 0, hybrid: 0 };
+    Object.values(cityData).forEach(d => {
+      if (!d.decision) return;
+      const src = (d.decision.recommended_source || "").toLowerCase();
+      if (src.includes("+")) counts.hybrid++;
+      else if (src.includes("solar")) counts.solar++;
+      else if (src.includes("battery")) counts.battery++;
+      else counts.grid++;
+    });
+    mixChart.data.datasets[0].data = [counts.solar, counts.battery, counts.grid, counts.hybrid];
+    mixChart.update();
+  }
+
+  // ─── Summary bar ──────────────────────────────────────────────────────────
+  function updateSummary() {
+    let totalDemand = 0, totalSolar = 0, totalCO2 = 0, alerts = 0;
+    Object.values(cityData).forEach(d => {
+      if (d.reading) { totalDemand += d.reading.demand_kw || 0; totalSolar += d.reading.solar_kw || 0; }
+      if (d.decision) { totalCO2 += d.decision.co2_saved_kg || 0; if (d.decision.alert) alerts++; }
+    });
+    document.getElementById("sum-demand").textContent = totalDemand.toFixed(0);
+    document.getElementById("sum-solar").textContent  = totalSolar.toFixed(0);
+    document.getElementById("sum-co2").textContent    = totalCO2.toFixed(0);
+    document.getElementById("sum-alerts").textContent = alerts;
+  }
+
+  // ─── CO2 bars ─────────────────────────────────────────────────────────────
+  function updateCO2Bars() {
+    const container = document.getElementById("co2-bars");
+    const maxCO2 = Math.max(...Object.values(cityData).map(d => d.decision?.co2_saved_kg || 0), 1);
+    container.innerHTML = CITIES.map(city => {
+      const saved = cityData[city]?.decision?.co2_saved_kg || 0;
+      const pct = (saved / maxCO2 * 100).toFixed(0);
+      return `<div class="co2-bar">
+        <div class="co2-label"><span>${city}</span><span style="color:var(--green)">${saved} kg</span></div>
+        <div class="co2-track"><div class="co2-fill" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join("");
+  }
+
+  // ─── Decision log ─────────────────────────────────────────────────────────
+  function addToLog(city, decision) {
+    const time = new Date().toLocaleTimeString("en-IN", { hour12: false });
+    decisionLog.unshift({ city, src: decision.recommended_source, time });
+    if (decisionLog.length > 20) decisionLog.pop();
+    const logEl = document.getElementById("decision-log");
+    logEl.innerHTML = decisionLog.map(e => `
+      <div class="log-entry">
+        <div><div class="log-city">${e.city}</div><div class="log-src" style="color:var(--muted)">${e.src}</div></div>
+        <div class="log-time">${e.time}</div>
+      </div>
+    `).join("");
+  }
+
+  // ─── Firebase listeners ────────────────────────────────────────────────────
+  function listenToCity(city) {
+    cityData[city] = {};
+
+    // Listen to latest sensor reading
+    dbRef.ref(`cities/${city}/latest`).on("value", snap => {
+      if (!snap.exists()) return;
+      cityData[city].reading = snap.val();
+      updateCityCard(city, cityData[city].reading, null);
+      updateSummary();
+    });
+
+    // Listen to AI decision
+    dbRef.ref(`cities/${city}/decision`).on("value", snap => {
+      if (!snap.exists()) return;
+      cityData[city].decision = snap.val();
+      updateCityCard(city, null, cityData[city].decision);
+      addToLog(city, cityData[city].decision);
+      updateMixChart();
+      updateSummary();
+      updateCO2Bars();
+    });
+  }
+
+  // ─── Init ─────────────────────────────────────────────────────────────────
+  buildCityCards();
+  initMixChart();
+  CITIES.forEach(listenToCity);
+</script>
+</body>
+</html>
